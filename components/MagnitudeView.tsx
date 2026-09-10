@@ -10,9 +10,9 @@ export function MagnitudeView({ results }: { results: Record<number, MagnitudeRe
 
   const rows = result
     ? [
-        { label: 'Peak Sensor Reading', without: result.peakWithout, withD: result.peakWith },
-        { label: 'Maximum Vibration', without: result.maxVibrationWithout, withD: result.maxVibrationWith },
-        { label: 'Average Reading', without: result.avgWithout, withD: result.avgWith },
+        { label: 'Peak Ground Acceleration (PGA)', without: result.peakWithout, withD: result.peakWith },
+        { label: 'Maximum Peak-to-Peak Vibration', without: result.maxVibrationWithout, withD: result.maxVibrationWith },
+        { label: 'Average Seismic Amplitude', without: result.avgWithout, withD: result.avgWith },
       ]
     : [];
 
@@ -60,7 +60,7 @@ export function MagnitudeView({ results }: { results: Record<number, MagnitudeRe
             <table className="w-full text-sm">
               <thead className="bg-slate-800/60 text-slate-300">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium">Reading</th>
+                  <th className="text-left px-4 py-3 font-medium">Reading Metric</th>
                   <th className="text-right px-4 py-3 font-medium">Without Damper</th>
                   <th className="text-right px-4 py-3 font-medium">With Damper</th>
                 </tr>
@@ -70,10 +70,10 @@ export function MagnitudeView({ results }: { results: Record<number, MagnitudeRe
                   <tr key={r.label} className="border-t border-slate-800 bg-slate-900/40">
                     <td className="px-4 py-3 text-slate-300">{r.label}</td>
                     <td className="px-4 py-3 text-right text-red-400 font-mono">
-                      {r.without.toFixed(2)}
+                      {r.without.toFixed(3)}
                     </td>
                     <td className="px-4 py-3 text-right text-sky-400 font-mono">
-                      {r.withD.toFixed(2)}
+                      {r.withD.toFixed(3)}
                     </td>
                   </tr>
                 ))}

@@ -1,12 +1,16 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { getSeismicIntensity, SensorUnit } from '@/lib/types';
 
 interface BuildingsProps {
   withoutDamper?: number;
   withDamper?: number;
   running?: boolean;
   magnitude?: number;
+  unit?: SensorUnit;
+  sampleRateHz?: number;
+  isDualSensor?: boolean;
 }
 
 export function Buildings({
@@ -14,6 +18,9 @@ export function Buildings({
   withDamper = 0,
   running = false,
   magnitude = 5.5,
+  unit = 'g',
+  sampleRateHz = 0,
+  isDualSensor = false,
 }: BuildingsProps) {
   // Manual sway override when test is not running so user can play with the clay physics anytime
   const [manualSway, setManualSway] = useState(0);
@@ -25,26 +32,62 @@ export function Buildings({
   // Tuned mass damper attenuates vibration by ~60-75% with a counter-phase lag
   const rawWith = isLive ? withDamper : manualSway * 0.35;
 
-  // Max sway limit for normalization and scaling
-  const maxLimit = Math.max(Math.abs(rawWithout), Math.abs(rawWith), 15);
-  
-  // Calculate sway angles in degrees (clamped to realistic structural limits)
-  const sway1Angle = Math.max(-18, Math.min(18, (rawWithout / maxLimit) * 16));
-  const sway2Angle = Math.max(-18, Math.min(18, (rawWith / maxLimit) * 16));
+  // Calculate sway angles and structural stress based on MPU-6050 physical units
+  const { sway1Angle, sway2Angle, stress1, stress2 } = useMemo(() => {
+    if (!isLive) {
+      // Manual slider mode (-15 deg to +15 deg)
+      const a1 = manualSway;
+      const a2 = manualSway * 0.35;
+      const s1 = Math.min(100, Math.round((Math.abs(manualSway) / 14) * 100));
+      const s2 = Math.min(100, Math.round((Math.abs(manualSway * 0.35) / 14) * 100));
+      return { sway1Angle: a1, sway2Angle: a2, stress1: s1, stress2: s2 };
+    }
+
+    // Physical MPU-6050 sensor mode:
+    let s1 = 0;
+    let s2 = 0;
+    let a1 = 0;
+    let a2 = 0;
+
+    if (unit === 'mps2') {
+      // 1g = 9.81 m/s^2; 7.8 m/s^2 is severe earthquake lateral acceleration
+      s1 = Math.min(100, Math.round((Math.abs(rawWithout) / 7.8) * 100));
+      s2 = Math.min(100, Math.round((Math.abs(rawWith) / 7.8) * 100));
+      a1 = Math.max(-18, Math.min(18, (rawWithout / 7.8) * 15));
+      a2 = Math.max(-18, Math.min(18, (rawWith / 7.8) * 15));
+    } else if (unit === 'deg') {
+      s1 = Math.min(100, Math.round((Math.abs(rawWithout) / 15) * 100));
+      s2 = Math.min(100, Math.round((Math.abs(rawWith) / 15) * 100));
+      a1 = Math.max(-18, Math.min(18, rawWithout));
+      a2 = Math.max(-18, Math.min(18, rawWith));
+    } else {
+      // Unit = 'g' (standard MPU-6050 accelerometer output)
+      // 0.8g lateral acceleration is critical structural collapse threshold
+      s1 = Math.min(100, Math.round((Math.abs(rawWithout) / 0.8) * 100));
+      s2 = Math.min(100, Math.round((Math.abs(rawWith) / 0.8) * 100));
+      a1 = Math.max(-18, Math.min(18, (rawWithout / 0.8) * 15));
+      a2 = Math.max(-18, Math.min(18, (rawWith / 0.8) * 15));
+    }
+
+    return { sway1Angle: a1, sway2Angle: a2, stress1: s1, stress2: s2 };
+  }, [isLive, manualSway, rawWithout, rawWith, unit]);
 
   // Tuned Mass Damper counter-oscillation (swings opposite to building tilt)
   const tmdCounterSway = -sway2Angle * 2.2;
 
-  // Structural stress levels (0 to 100%)
-  const stress1 = Math.min(100, Math.round((Math.abs(rawWithout) / 14) * 100));
-  const stress2 = Math.min(100, Math.round((Math.abs(rawWith) / 14) * 100));
+  // Seismic intensity category from MPU-6050 accelerometer reading
+  const intensity1 = useMemo(() => {
+    const gVal = unit === 'mps2' ? rawWithout / 9.80665 : unit === 'deg' ? (rawWithout / 15) * 0.8 : rawWithout;
+    return getSeismicIntensity(gVal);
+  }, [rawWithout, unit]);
 
   // Attenuation percentage
   const attenuation = useMemo(() => {
-    if (Math.abs(rawWithout) < 0.05) return 65;
+    if (Math.abs(rawWithout) < 0.01) return 65;
     const diff = Math.abs(rawWithout) - Math.abs(rawWith);
     return Math.max(0, Math.min(95, Math.round((diff / Math.abs(rawWithout)) * 100)));
   }, [rawWithout, rawWith]);
+
 
   return (
     <div
@@ -74,7 +117,25 @@ export function Buildings({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          {/* Hardware & Sensor Compatibility Badge */}
+          <div
+            className="px-3 py-1.5 rounded-full text-xs font-mono font-medium text-cyan-300 flex items-center gap-1.5"
+            style={{
+              background: 'linear-gradient(135deg, #0c2b42, #081a28)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              boxShadow: '2px 2px 6px rgba(0,0,0,0.4)',
+            }}
+          >
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span>MPU-6050</span>
+            <span className="text-slate-500">|</span>
+            <span>Arduino Uno R3</span>
+            {sampleRateHz > 0 && (
+              <span className="text-emerald-400 font-bold ml-1">({sampleRateHz} Hz)</span>
+            )}
+          </div>
+
           {running && (
             <div
               className="px-3.5 py-1.5 rounded-full text-xs font-semibold tracking-wider uppercase text-rose-300 animate-pulse flex items-center gap-1.5"
@@ -241,7 +302,7 @@ export function Buildings({
 
             {/* Label and Live Readings Card */}
             <div
-              className="mt-4 w-full rounded-2xl p-3 text-center"
+              className="mt-4 w-full rounded-2xl p-3.5 text-left"
               style={{
                 background: 'linear-gradient(145deg, #22293a, #181e2b)',
                 boxShadow: `
@@ -251,22 +312,43 @@ export function Buildings({
                 `,
               }}
             >
-              <div className="text-xs font-semibold text-rose-300">Building 1 — No Damper</div>
-              <div className="mt-1 flex items-baseline justify-center gap-1.5">
-                <span className="text-xs text-slate-400">Displacement:</span>
-                <span className="text-base font-mono font-bold text-rose-400">
-                  {rawWithout > 0 ? `+${rawWithout.toFixed(2)}` : rawWithout.toFixed(2)}
+              <div className="flex items-center justify-between text-xs font-semibold text-rose-300">
+                <span>Building 1 — No Damper</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-950/70 text-rose-400 border border-rose-800/40">
+                  {unit}
                 </span>
               </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xs text-slate-400 font-mono">
+                  {unit === 'deg' ? 'Tilt Sway:' : 'Acceleration:'}
+                </span>
+                <span className="text-base font-mono font-bold text-rose-400">
+                  {rawWithout > 0 ? `+${rawWithout.toFixed(3)}` : rawWithout.toFixed(3)}
+                  <span className="text-xs text-slate-500 font-normal ml-1">{unit}</span>
+                </span>
+              </div>
+              {/* Seismic Intensity Rating */}
+              <div className="mt-1 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500">Seismic Level:</span>
+                <span className={`font-medium ${intensity1.color}`}>{intensity1.label}</span>
+              </div>
               {/* Stress progress meter */}
-              <div className="w-full bg-slate-800/80 rounded-full h-1.5 mt-2 overflow-hidden border border-slate-700/50">
-                <div
-                  className="h-full rounded-full transition-all duration-150"
-                  style={{
-                    width: `${stress1}%`,
-                    background: stress1 > 60 ? '#f43f5e' : '#fb923c',
-                  }}
-                />
+              <div className="mt-2.5">
+                <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                  <span>Structural Stress</span>
+                  <span className={stress1 > 70 ? 'text-rose-400 font-bold' : stress1 > 40 ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>
+                    {stress1}%
+                  </span>
+                </div>
+                <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-slate-700/50">
+                  <div
+                    className="h-full rounded-full transition-all duration-150"
+                    style={{
+                      width: `${stress1}%`,
+                      background: stress1 > 70 ? 'linear-gradient(90deg, #f59e0b, #ef4444)' : stress1 > 40 ? '#f59e0b' : '#10b981',
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -445,7 +527,7 @@ export function Buildings({
 
             {/* Label and Live Readings Card */}
             <div
-              className="mt-4 w-full rounded-2xl p-3 text-center"
+              className="mt-4 w-full rounded-2xl p-3.5 text-left"
               style={{
                 background: 'linear-gradient(145deg, #22293a, #181e2b)',
                 boxShadow: `
@@ -455,22 +537,41 @@ export function Buildings({
                 `,
               }}
             >
-              <div className="text-xs font-semibold text-sky-300">Building 2 — With Damper</div>
-              <div className="mt-1 flex items-baseline justify-center gap-1.5">
-                <span className="text-xs text-slate-400">Displacement:</span>
-                <span className="text-base font-mono font-bold text-sky-400">
-                  {rawWith > 0 ? `+${rawWith.toFixed(2)}` : rawWith.toFixed(2)}
+              <div className="flex items-center justify-between text-xs font-semibold text-sky-300">
+                <span>Building 2 — With Damper</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-950/70 text-sky-400 border border-sky-800/40">
+                  {unit}
                 </span>
               </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xs text-slate-400 font-mono">
+                  {unit === 'deg' ? 'Tilt Sway:' : 'Acceleration:'}
+                </span>
+                <span className="text-base font-mono font-bold text-sky-400">
+                  {rawWith > 0 ? `+${rawWith.toFixed(3)}` : rawWith.toFixed(3)}
+                  <span className="text-xs text-slate-500 font-normal ml-1">{unit}</span>
+                </span>
+              </div>
+              {/* Damping Reduction */}
+              <div className="mt-1 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500">TMD Attenuation:</span>
+                <span className="font-bold font-mono text-emerald-400">-{attenuation}%</span>
+              </div>
               {/* Stress progress meter */}
-              <div className="w-full bg-slate-800/80 rounded-full h-1.5 mt-2 overflow-hidden border border-slate-700/50">
-                <div
-                  className="h-full rounded-full transition-all duration-150"
-                  style={{
-                    width: `${stress2}%`,
-                    background: '#38bdf8',
-                  }}
-                />
+              <div className="mt-2.5">
+                <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                  <span>Damped Stress</span>
+                  <span className="text-sky-400 font-semibold">{stress2}%</span>
+                </div>
+                <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-slate-700/50">
+                  <div
+                    className="h-full rounded-full transition-all duration-150"
+                    style={{
+                      width: `${stress2}%`,
+                      background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>
